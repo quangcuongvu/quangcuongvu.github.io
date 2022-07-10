@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="x-ua-compatible" content="ie=edge">
+		<meta name="author" content="Alex Edwards">
+		<meta name="copyright" content="Copyright Alex Edwards 2021">
+		<title>Managing and Automating Version Numbers &mdash; Let's Go Further Further</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+		<link rel="stylesheet" type="text/css" href="assets/css/main.css">
+		<link rel="icon" type="image/x-icon" href="assets/img/favicon.ico">
+	</head>
+	<body>
+		<header>
+			<div class="wrapper">
+				<div>
+					
+						
+						<a href="00.00-front-matter.html">Let's Go Further</a> <span class="crumbs">&rsaquo; <a href="20.00-building-versioning-and-quality-control.html">Building, Versioning and Quality Control</a> &rsaquo; Managing and Automating Version Numbers</span>
+						
+					
+				</div>
+				<div>
+					&lsaquo; <a href="20.05-building-binaries.html">Previous</a>
+					&middot; <a href="00.01-contents.html">Contents</a> &middot;
+					<a href="21.00-deployment-and-hosting.html">Next</a> &rsaquo;
+				</div>
+			</div>
+		</header>
+		<main class="wrapper text">
+			<div class="chapter">Chapter 20.6.</div>
+			<h2 id="managing-and-automating-version-numbers">Managing and Automating Version Numbers</h2>
+
+<p>Right at the start of this book, we hard-coded the version number for our application as the constant <code>&quot;1.0.0&quot;</code> in the <code>cmd/api/main.go</code> file.</p>
+
+<p>In this chapter, we&rsquo;re going take steps to make it easier to view and manage this version number, and also explain how you can generate version numbers automatically based on Git commits and integrate them into your application.</p>
+
+<h3 id="displaying-the-version-number">Displaying the version number</h3>
+
+<p>Let&rsquo;s start by updating our application so that we can easily check the version number by running the binary with a <code>-version</code> command-line flag, similar to this:</p>
+
+<figure class="code bash">
+<pre>$ ./bin/api -version
+<samp>Version:        1.0.0</samp></pre>
+</figure>
+
+<p>Conceptually, this is fairly straightforward to implement. We need to define a boolean <code>version</code> command-line flag, check for this flag on startup, and then print out the version number and exit the application if necessary.</p>
+
+<p>If you&rsquo;re following along, go ahead and update your <code>cmd/api/main.go</code> file like so:</p>
+
+<figure class="code go">
+<figcaption>File: cmd/api/main.go</figcaption>
+<pre><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+    <span class="s">&#34;context&#34;</span>
+    <span class="s">&#34;database/sql&#34;</span>
+    <span class="s">&#34;expvar&#34;</span>
+    <span class="s">&#34;flag&#34;</span>
+    <span class="s">&#34;fmt&#34;</span> <span class="c1">// New import
+</span><span class="c1"></span>    <span class="s">&#34;os&#34;</span>
+    <span class="s">&#34;runtime&#34;</span>
+    <span class="s">&#34;strings&#34;</span>
+    <span class="s">&#34;sync&#34;</span>
+    <span class="s">&#34;time&#34;</span>
+
+    <span class="s">&#34;greenlight.alexedwards.net/internal/data&#34;</span>
+    <span class="s">&#34;greenlight.alexedwards.net/internal/jsonlog&#34;</span>
+    <span class="s">&#34;greenlight.alexedwards.net/internal/mailer&#34;</span>
+
+    <span class="nx">_</span> <span class="s">&#34;github.com/lib/pq&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">const</span> <span class="nx">version</span> <span class="p">=</span> <span class="s">&#34;1.0.0&#34;</span>
+
+<span class="o">...</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">cfg</span> <span class="nx">config</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">port</span><span class="p">,</span> <span class="s">&#34;port&#34;</span><span class="p">,</span> <span class="mi">4000</span><span class="p">,</span> <span class="s">&#34;API server port&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">env</span><span class="p">,</span> <span class="s">&#34;env&#34;</span><span class="p">,</span> <span class="s">&#34;development&#34;</span><span class="p">,</span> <span class="s">&#34;Environment (development|staging|production)&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">dsn</span><span class="p">,</span> <span class="s">&#34;db-dsn&#34;</span><span class="p">,</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="s">&#34;PostgreSQL DSN&#34;</span><span class="p">)</span>
+    
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxOpenConns</span><span class="p">,</span> <span class="s">&#34;db-max-open-conns&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max open connections&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxIdleConns</span><span class="p">,</span> <span class="s">&#34;db-max-idle-conns&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max idle connections&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxIdleTime</span><span class="p">,</span> <span class="s">&#34;db-max-idle-time&#34;</span><span class="p">,</span> <span class="s">&#34;15m&#34;</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max connection idle time&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">BoolVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">enabled</span><span class="p">,</span> <span class="s">&#34;limiter-enabled&#34;</span><span class="p">,</span> <span class="kc">true</span><span class="p">,</span> <span class="s">&#34;Enable rate limiter&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Float64Var</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">rps</span><span class="p">,</span> <span class="s">&#34;limiter-rps&#34;</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="s">&#34;Rate limiter maximum requests per second&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">burst</span><span class="p">,</span> <span class="s">&#34;limiter-burst&#34;</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="s">&#34;Rate limiter maximum burst&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">host</span><span class="p">,</span> <span class="s">&#34;smtp-host&#34;</span><span class="p">,</span> <span class="s">&#34;smtp.mailtrap.io&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP host&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">port</span><span class="p">,</span> <span class="s">&#34;smtp-port&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;SMTP port&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">username</span><span class="p">,</span> <span class="s">&#34;smtp-username&#34;</span><span class="p">,</span> <span class="s">&#34;0abf276416b183&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP username&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">password</span><span class="p">,</span> <span class="s">&#34;smtp-password&#34;</span><span class="p">,</span> <span class="s">&#34;d8672aa2264bb5&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP password&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">sender</span><span class="p">,</span> <span class="s">&#34;smtp-sender&#34;</span><span class="p">,</span> <span class="s">&#34;Greenlight &lt;no-reply@greenlight.alexedwards.net&gt;&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP sender&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Func</span><span class="p">(</span><span class="s">&#34;cors-trusted-origins&#34;</span><span class="p">,</span> <span class="s">&#34;Trusted CORS origins (space separated)&#34;</span><span class="p">,</span> <span class="kd">func</span><span class="p">(</span><span class="nx">val</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+        <span class="nx">cfg</span><span class="p">.</span><span class="nx">cors</span><span class="p">.</span><span class="nx">trustedOrigins</span> <span class="p">=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Fields</span><span class="p">(</span><span class="nx">val</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">nil</span>
+    <span class="p">}</span><span class="p">)</span>
+
+    <span class="c1">// Create a new version boolean flag with the default value of false.
+</span><span class="c1"></span>    <span class="nx">displayVersion</span> <span class="o">:=</span> <span class="nx">flag</span><span class="p">.</span><span class="nf">Bool</span><span class="p">(</span><span class="s">&#34;version&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="s">&#34;Display version and exit&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Parse</span><span class="p">(</span><span class="p">)</span>
+
+    <span class="c1">// If the version flag value is true, then print out the version number and
+</span><span class="c1"></span>    <span class="c1">// immediately exit.
+</span><span class="c1"></span>    <span class="k">if</span> <span class="o">*</span><span class="nx">displayVersion</span> <span class="p">{</span>
+        <span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Version:\t%s\n&#34;</span><span class="p">,</span> <span class="nx">version</span><span class="p">)</span>
+        <span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="o">...</span>
+<span class="p">}</span>
+
+<span class="o">...</span>
+</pre>
+</figure>
+
+<p>OK, let&rsquo;s try this out. Go ahead and re-build the executable binaries using <code>make build/api</code>, then run the <code>./bin/api</code> binary with the <code>-version</code> flag.</p>
+
+<p>You should find that it prints out the version number and then exits, similar to this:</p>
+
+<figure class="code bash">
+<pre>$ make build/api 
+<samp>Building cmd/api...
+go build -ldflags=&#34;-s&#34; -o=&#34;./bin/api&#34; ./cmd/api
+GOOS=linux GOARCH=amd64 go build -ldflags=&#34;-s&#34; -o=&#34;./bin/linux_amd64/api&#34; ./cmd/api</samp>
+
+$ ./bin/api -version
+<samp>Version:        1.0.0</samp></pre>
+</figure>
+
+<aside class="hint"><p>
+<strong>Remember:</strong> Boolean command-line flags <em>without a value</em> are interpreted as having the value <code>true</code>. So running our application with <code>-version</code> is the same as running it with <code>-version=true</code>.
+</p></aside>
+
+<h3 id="including-the-build-time">Including the build time</h3>
+
+<p>Let&rsquo;s extend this further, so that the <code>-version</code> flag forces our application to print out the version number <em>and</em> the exact time that the executable binary was built. Similar to this:</p>
+
+<figure class="code bash">
+<pre>$ ./bin/api -version
+<samp>Version:        1.0.0
+Build time:     2021-02-15T13:54:14+01:00</samp></pre>
+</figure>
+
+<p>This is a really interesting change, because the build time is a completely dynamic value and <em>outside the control of our application code</em>. We don&rsquo;t know the build time <em>in advance</em> of calling <code>go build</code>, and therefore it&rsquo;s not something that we can define in our source code in the normal way.</p>
+
+<p>To make this work, we&rsquo;ll need to use a special feature of <code>go build</code> &mdash; the <code>-X</code> linker flag which allows you to assign or &lsquo;burn-in&rsquo; a value to a variable when running <code>go build</code>. Specifically, we&rsquo;ll generate a string containing the current date and time in our makefile, and then &lsquo;burn this in&rsquo; to the binary as part of our <code>make build/api</code> rule.</p>
+
+<p>I&rsquo;ll demonstrate.</p>
+
+<p>Open up the <code>cmd/api/main.go</code> file and update it to include and print out a new <code>buildTime</code> variable, like so:</p>
+
+<figure class="code go">
+<figcaption>File: cmd/api/main.go</figcaption>
+<pre><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="o">...</span>
+
+<span class="kd">const</span> <span class="nx">version</span> <span class="p">=</span> <span class="s">&#34;1.0.0&#34;</span>
+
+<span class="c1">// Create a buildTime variable to hold the executable binary build time. Note that this
+</span><span class="c1"></span><span class="c1">// must be a string type, as the -X linker flag will only work with string variables.
+</span><span class="c1"></span><span class="kd">var</span> <span class="nx">buildTime</span> <span class="kt">string</span>
+
+<span class="o">...</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">cfg</span> <span class="nx">config</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">port</span><span class="p">,</span> <span class="s">&#34;port&#34;</span><span class="p">,</span> <span class="mi">4000</span><span class="p">,</span> <span class="s">&#34;API server port&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">env</span><span class="p">,</span> <span class="s">&#34;env&#34;</span><span class="p">,</span> <span class="s">&#34;development&#34;</span><span class="p">,</span> <span class="s">&#34;Environment (development|staging|production)&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">dsn</span><span class="p">,</span> <span class="s">&#34;db-dsn&#34;</span><span class="p">,</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="s">&#34;PostgreSQL DSN&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxOpenConns</span><span class="p">,</span> <span class="s">&#34;db-max-open-conns&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max open connections&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxIdleConns</span><span class="p">,</span> <span class="s">&#34;db-max-idle-conns&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max idle connections&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">db</span><span class="p">.</span><span class="nx">maxIdleTime</span><span class="p">,</span> <span class="s">&#34;db-max-idle-time&#34;</span><span class="p">,</span> <span class="s">&#34;15m&#34;</span><span class="p">,</span> <span class="s">&#34;PostgreSQL max connection idle time&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">BoolVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">enabled</span><span class="p">,</span> <span class="s">&#34;limiter-enabled&#34;</span><span class="p">,</span> <span class="kc">true</span><span class="p">,</span> <span class="s">&#34;Enable rate limiter&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Float64Var</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">rps</span><span class="p">,</span> <span class="s">&#34;limiter-rps&#34;</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="s">&#34;Rate limiter maximum requests per second&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">limiter</span><span class="p">.</span><span class="nx">burst</span><span class="p">,</span> <span class="s">&#34;limiter-burst&#34;</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="s">&#34;Rate limiter maximum burst&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">host</span><span class="p">,</span> <span class="s">&#34;smtp-host&#34;</span><span class="p">,</span> <span class="s">&#34;smtp.mailtrap.io&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP host&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">IntVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">port</span><span class="p">,</span> <span class="s">&#34;smtp-port&#34;</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="s">&#34;SMTP port&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">username</span><span class="p">,</span> <span class="s">&#34;smtp-username&#34;</span><span class="p">,</span> <span class="s">&#34;0abf276416b183&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP username&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">password</span><span class="p">,</span> <span class="s">&#34;smtp-password&#34;</span><span class="p">,</span> <span class="s">&#34;d8672aa2264bb5&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP password&#34;</span><span class="p">)</span>
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">StringVar</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">cfg</span><span class="p">.</span><span class="nx">smtp</span><span class="p">.</span><span class="nx">sender</span><span class="p">,</span> <span class="s">&#34;smtp-sender&#34;</span><span class="p">,</span> <span class="s">&#34;Greenlight &lt;no-reply@greenlight.alexedwards.net&gt;&#34;</span><span class="p">,</span> <span class="s">&#34;SMTP sender&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Func</span><span class="p">(</span><span class="s">&#34;cors-trusted-origins&#34;</span><span class="p">,</span> <span class="s">&#34;Trusted CORS origins (space separated)&#34;</span><span class="p">,</span> <span class="kd">func</span><span class="p">(</span><span class="nx">val</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+        <span class="nx">cfg</span><span class="p">.</span><span class="nx">cors</span><span class="p">.</span><span class="nx">trustedOrigins</span> <span class="p">=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Fields</span><span class="p">(</span><span class="nx">val</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">nil</span>
+    <span class="p">}</span><span class="p">)</span>
+
+    <span class="nx">displayVersion</span> <span class="o">:=</span> <span class="nx">flag</span><span class="p">.</span><span class="nf">Bool</span><span class="p">(</span><span class="s">&#34;version&#34;</span><span class="p">,</span> <span class="kc">false</span><span class="p">,</span> <span class="s">&#34;Display version and exit&#34;</span><span class="p">)</span>
+
+    <span class="nx">flag</span><span class="p">.</span><span class="nf">Parse</span><span class="p">(</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="o">*</span><span class="nx">displayVersion</span> <span class="p">{</span>
+        <span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Version:\t%s\n&#34;</span><span class="p">,</span> <span class="nx">version</span><span class="p">)</span>
+        <span class="c1">// Print out the contents of the buildTime variable.
+</span><span class="c1"></span>        <span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Build time:\t%s\n&#34;</span><span class="p">,</span> <span class="nx">buildTime</span><span class="p">)</span>
+        <span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="o">...</span>
+<span class="p">}</span>
+
+<span class="o">...</span></pre>
+</figure>
+
+<p>And then we need to make a couple of changes to our <code>Makefile</code>. Specifically, we need to:</p>
+
+<ol>
+<li>Use the unix <code>date</code> command to generate the current time and store it in a <code>current_time</code> variable.</li>
+<li>Update the <code>build/api</code> rule to &lsquo;burn in&rsquo; the current time to our <code>main.buildTime</code> variable using the <code>-X</code> linker flag.</li>
+</ol>
+
+<p>Like this:</p>
+
+<figure class="code shell">
+<figcaption>File: Makefile</figcaption>
+<pre>
+...
+
+<span class="c1"># ==================================================================================== #</span>
+<span class="c1"># BUILD</span>
+<span class="c1"># ==================================================================================== #</span>
+
+<span class="nv">current_time</span> <span class="o">=</span> <span class="k">$(</span>shell date --iso-8601<span class="o">=</span>seconds<span class="k">)</span>
+
+<span class="c1">## build/api: build the cmd/api application</span>
+.PHONY: build/api
+build/api:
+	@echo <span class="s1">&#39;Building cmd/api...&#39;</span>
+	go build -ldflags<span class="o">=</span><span class="s1">&#39;-s -X main.buildTime=${current_time}&#39;</span> -o<span class="o">=</span>./bin/api ./cmd/api
+	<span class="nv">GOOS</span><span class="o">=</span>linux <span class="nv">GOARCH</span><span class="o">=</span>amd64 go build -ldflags<span class="o">=</span><span class="s1">&#39;-s -X main.buildTime=${current_time}&#39;</span> -o<span class="o">=</span>./bin/linux_amd64/api ./cmd/api</pre>
+</figure>
+
+<aside class="important"><p>
+<strong>Important:</strong> Old versions of the <code>date</code> command may not support the <code>--iso-8601</code> flag. If this affects you, then you can swap the code above to use the command
+<code>date -u +&quot;%Y-%m-%dT%H:%M:%SZ&quot;</code> instead.
+</p></aside>
+
+<p>If you re-build the binaries and run them with the <code>-version</code> flag, they should now print the exact time that they were built alongside the version number. Similar to this:</p>
+
+<figure class="code bash">
+<pre>$ make build/api 
+<samp>Building cmd/api...
+go build -ldflags=&#39;-s -X main.buildTime=2021-04-18T18:21:40+02:00&#39; -o=./bin/api ./cmd/api
+GOOS=linux GOARCH=amd64 go build -ldflags=&#39;-s -X main.buildTime=2021-04-18T18:21:40+02:00&#39; -o=./bin/linux_amd64/api ./cmd/api</samp>
+
+$ ./bin/api -version
+<samp>Version:        1.0.0
+Build time:     2021-04-18T18:21:40+02:00</samp></pre>
+</figure>
+
+<p>Note that if you execute the application <em>without</em> burning in a <code>buildTime</code> value, then <code>buildTime</code> will retain its default value as set in the application code (which in our case is the empty string <code>&quot;&quot;</code>). For example, when using <code>go run</code>:</p>
+
+<figure class="code bash">
+<pre>$ go run ./cmd/api -version
+<samp>Version:        1.0.0
+Build time:     </samp></pre>
+</figure>
+
+<p>The lines in our Makefile are getting a bit long, so let&rsquo;s quickly break out the linker flags into a reusable variable, like so:</p>
+
+<figure class="code shell">
+<figcaption>File: Makefile</figcaption>
+<pre>
+...
+
+<span class="c1"># ==================================================================================== #</span>
+<span class="c1"># BUILD</span>
+<span class="c1"># ==================================================================================== #</span>
+
+<span class="nv">current_time</span> <span class="o">=</span> <span class="k">$(</span>shell date --iso-8601<span class="o">=</span>seconds<span class="k">)</span>
+<span class="nv">linker_flags</span> <span class="o">=</span> <span class="s1">&#39;-s -X main.buildTime=${current_time}&#39;</span>
+
+<span class="c1">## build/api: build the cmd/api application</span>
+.PHONY: build/api
+build/api:
+	@echo <span class="s1">&#39;Building cmd/api...&#39;</span>
+	go build -ldflags<span class="o">=</span><span class="si">${</span><span class="nv">linker_flags</span><span class="si">}</span> -o<span class="o">=</span>./bin/api ./cmd/api
+	<span class="nv">GOOS</span><span class="o">=</span>linux <span class="nv">GOARCH</span><span class="o">=</span>amd64 go build -ldflags<span class="o">=</span><span class="si">${</span><span class="nv">linker_flags</span><span class="si">}</span> -o<span class="o">=</span>./bin/linux_amd64/api ./cmd/api</pre>
+</figure>
+
+<h3 id="automated-version-numbering-with-git">Automated version numbering with Git</h3>
+
+<p>If you&rsquo;re using Git to version control your source code, then it&rsquo;s possible to extend the ideas we&rsquo;ve talked about in this chapter to create <em>automated version numbers</em> for your application based on your Git commits.</p>
+
+<aside class="important"><p>
+<strong>Important:</strong> This part of the book is only really relevant if you use Git. If you don&rsquo;t, then that&rsquo;s absolutely fine and you can skip ahead to the next chapter with no issues.
+</p></aside>
+
+<p>Otherwise, if you&rsquo;re following along (and haven&rsquo;t done it already), please go ahead and initialize a new Git repository in the root of your project directory:</p>
+
+<figure class="code bash">
+<pre>$ git init
+<samp>Initialized empty Git repository in /home/alex/Projects/greenlight/.git/</samp></pre>
+</figure>
+
+<p>Then make a new commit containing all the files in your project directory, like so:</p>
+
+<figure class="code bash">
+<pre>$ git add .
+$ git commit -m &#34;Initial commit&#34;</pre>
+</figure>
+
+<p>If you look at your commit history using the <a href="https://git-scm.com/docs/git-log"><code>git log</code></a> command, you&rsquo;ll see the <em>hash</em> for this commit.</p>
+
+<figure class="code bash">
+<pre>$ git log
+<samp>commit 0f8573aab79f3cbee17d39901d5cb200121c7ed1 (HEAD -&gt; master)
+Author: Alex Edwards &lt;alex@alexedwards.net&gt;
+Date:   Sun Apr 18 18:29:48 2021 +0200
+
+    Initial commit</samp></pre>
+</figure>
+
+<p>In my case the commit hash is <code>0f8573aab79f3cbee17d39901d5cb200121c7ed1</code> &mdash; but yours will be a different value.</p>
+
+<p>It&rsquo;s also possible to use the <a href="https://git-scm.com/docs/git-describe"><code>git describe</code></a> command to get a &lsquo;human-readable&rsquo; descriptor for the current state of the repository. Like so:</p>
+
+<figure class="code bash">
+<pre>$ git describe --always --dirty
+<samp>0f8573a</samp></pre>
+</figure>
+
+<p>In this case, we can see that <code>git describe</code> returns an <em>abbreviated version of the commit hash</em>. We&rsquo;re also using the <code>--dirty</code> flag, which means that the descriptor will be suffixed with <code>&quot;-dirty&quot;</code> if there are any uncommitted changes in the repository. For example <code>0f8573a-dirty</code>.</p>
+
+<p>Let&rsquo;s update our project so that the output from <code>git describe</code> is burnt-in to our binaries as the application &lsquo;version number&rsquo; when building the executable.</p>
+
+<p>To do this, the first thing that we need to do is switch the <code>version</code> constant in our <code>cmd/api/main.go</code> file to be a variable, because it&rsquo;s not possible to &lsquo;burn-in&rsquo; a value to a constant.</p>
+
+<figure class="code go">
+<figcaption>File: cmd/api/main.go</figcaption>
+<pre><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="o">...</span>
+
+<span class="c1">// Remove the hardcoded version number and make version a variable instead of a constant.
+</span><span class="c1"></span><span class="kd">var</span> <span class="p">(</span>
+	<span class="nx">buildTime</span> <span class="kt">string</span>
+	<span class="nx">version</span>   <span class="kt">string</span>
+<span class="p">)</span>
+
+<span class="o">...</span></pre>
+</figure>
+
+<p>And then let&rsquo;s update our <code>Makefile</code> to burn-in the <code>git describe</code> output to the <code>version</code> variable in our application, using the same pattern that we did for the build time. Like so:</p>
+
+<figure class="code shell">
+<figcaption>File: Makefile</figcaption>
+<pre>...
+
+<span class="c1"># ==================================================================================== #</span>
+<span class="c1"># BUILD</span>
+<span class="c1"># ==================================================================================== #</span>
+
+<span class="nv">current_time</span> <span class="o">=</span> <span class="k">$(</span>shell date --iso-8601<span class="o">=</span>seconds<span class="k">)</span>
+<span class="nv">git_description</span> <span class="o">=</span> <span class="k">$(</span>shell git describe --always --dirty<span class="k">)</span>
+<span class="nv">linker_flags</span> <span class="o">=</span> <span class="s1">&#39;-s -X main.buildTime=${current_time} -X main.version=${git_description}&#39;</span>
+
+<span class="c1">## build/api: build the cmd/api application</span>
+.PHONY: build/api
+build/api:
+	@echo <span class="s1">&#39;Building cmd/api...&#39;</span>
+	go build -ldflags<span class="o">=</span><span class="si">${</span><span class="nv">linker_flags</span><span class="si">}</span> -o<span class="o">=</span>./bin/api ./cmd/api
+	<span class="nv">GOOS</span><span class="o">=</span>linux <span class="nv">GOARCH</span><span class="o">=</span>amd64 go build -ldflags<span class="o">=</span><span class="si">${</span><span class="nv">linker_flags</span><span class="si">}</span> -o<span class="o">=</span>./bin/linux_amd64/api ./cmd/api</pre>
+</figure>
+
+<p>At this point, let&rsquo;s quickly run <code>git describe</code> again:</p>
+
+<figure class="code bash">
+<pre>$ git describe --always --dirty
+<samp>0f8573a-dirty</samp></pre>
+</figure>
+
+<p>This output makes sense &mdash; the hash of the last commit was <code>0f8573a...</code>, and the <code>-dirty</code> suffix indicates that our repository now contains uncommitted changes (we&rsquo;ve altered the <code>cmd/api/main.go</code> and <code>Makefile</code> files since the previous commit).</p>
+
+<p>Let&rsquo;s commit these recent changes, run <code>make build/api</code> again, and then check the version number in our binaries. Like so:</p>
+
+<figure class="code bash">
+<pre>$ git add .
+$ git commit -m &#34;Generate version number automatically&#34;
+<samp>[master 76c976a] Generate version number automatically
+ 2 files changed, 6 insertions(+), 7 deletions(-)</samp>
+
+$ make build/api 
+<samp>Building cmd/api...
+go build -ldflags=&#39;-s -X main.buildTime=2021-04-18T18:43:32+02:00 -X main.version=76c976a&#39; -o=./bin/api ./cmd/api
+GOOS=linux GOARCH=amd64 go build -ldflags=&#39;-s -X main.buildTime=2021-04-18T18:43:32+02:00 -X main.version=76c976a&#39; -o=./bin/linux_amd64/api ./cmd/api</samp>
+
+$ ./bin/api -version
+<samp>Version:        76c976a
+Build time:     2021-04-18T18:43:32+02:00</samp></pre>
+</figure>
+
+<p>We can see that our binary is now reporting that it was been built from a <em>clean version of the repository with the commit hash <code>76c976a</code></em>. Let&rsquo;s cross check this against the <code>git log</code> output for the project:</p>
+
+<figure class="code bash">
+<pre>$ git log
+<samp>commit 76c976a07d0fce3d813f3a4748574f81b1e24226 (HEAD -&gt; master)
+Author: Alex Edwards &lt;alex@alexedwards.net&gt;
+Date:   Sun Apr 18 18:39:17 2021 +0200
+
+    Generate version number automatically
+
+commit 0f8573aab79f3cbee17d39901d5cb200121c7ed1
+Author: Alex Edwards &lt;alex@alexedwards.net&gt;
+Date:   Sun Apr 18 18:29:48 2021 +0200
+
+    Initial commit</samp></pre>
+</figure>
+
+<p>That&rsquo;s looking good &mdash; the commit hash in our Git history aligns perfectly with our application version number. And that means it&rsquo;s now easy for us to identify exactly what code a particular binary contains &mdash; all we need to do is run the binary with the <code>-version</code> flag and then cross-reference it against the Git repository history.</p>
+
+<h3 id="using-git-tags">Using Git tags</h3>
+
+<p>In some projects you may want to annotate certain Git commits with <a href="https://git-scm.com/book/en/v2/Git-Basics-Tagging">tags</a>, often to denote a formal release number.</p>
+
+<p>To illustrate this, let&rsquo;s add the <code>v1.0.0</code> tag to our latest commit like so:</p>
+
+<figure class="code bash">
+<pre>$ git tag v1.0.0
+$ git log
+<samp>commit 76c976a07d0fce3d813f3a4748574f81b1e24226 (HEAD -&gt; master, tag: v1.0.0)
+Author: Alex Edwards &lt;alex@alexedwards.net&gt;
+Date:   Sun Apr 18 18:39:17 2021 +0200
+
+    Generate version number automatically
+
+...</samp></pre>
+</figure>
+
+<p>If you&rsquo;re tagging your commits in this way, then it&rsquo;s a good idea to use the <code>--tags</code> and <code>--long</code> flags when calling <code>git describe</code> to generate the version number for your application. This will force the output to be in the following format:</p>
+
+<figure class="code plain">
+<pre>{tag}-{number of additional commits}-g{abbreviated commit hash}</pre>
+</figure>
+
+<p>Let&rsquo;s take a quick look at what this currently looks like for our project:</p>
+
+<figure class="code bash">
+<pre>$ git describe --always --dirty --tags --long
+<samp>v1.0.0-0-g76c976a</samp></pre>
+</figure>
+
+<p>So, in this case, we can see from the version number that the repository is based on <code>v1.0.0</code>, has 0 additional commits on top of that, and the latest commit hash is <code>76c976a</code>. The <code>g</code> character which prefixes the commit hash stands for &lsquo;git&rsquo;, and exists to help distinguish the hash from any hashes generated by other version-control systems.</p>
+
+<p>Let&rsquo;s update our <code>Makefile</code> to use these additional flags when generating the version number, like so:</p>
+
+<figure class="code shell">
+<figcaption>File: Makefile</figcaption>
+<pre>...
+
+<span class="c1"># ==================================================================================== #</span>
+<span class="c1"># BUILD</span>
+<span class="c1"># ==================================================================================== #</span>
+
+<span class="nv">current_time</span> <span class="o">=</span> <span class="k">$(</span>shell date --iso-8601<span class="o">=</span>seconds<span class="k">)</span>
+<span class="nv">git_description</span> <span class="o">=</span> <span class="k">$(</span>shell git describe --always --dirty --tags --long<span class="k">)</span>
+<span class="nv">linker_flags</span> <span class="o">=</span> <span class="s1">&#39;-s -X main.buildTime=${current_time} -X main.version=${git_description}&#39;</span>
+
+...</pre>
+</figure>
+
+<p>Then go ahead and commit this change, rebuild the binaries, and check the version number. Your output should look similar to this:</p>
+
+<figure class="code bash">
+<pre>$ git add .
+$ git commit -m &#34;Use --tags and --long flags when generating version number&#34;
+$ make build/api 
+$ ./bin/api -version
+<samp>Version:        v1.0.0-1-gf27fd0f
+Build time:     2021-04-18T18:54:05+02:00</samp></pre>
+</figure>
+
+<p>The version number has now been changed to <code>v1.0.0-1-gf27fd0f</code>, indicating that the binary was built using the repository code from commit <code>f27fd0f</code>, which is 1 commit ahead of the <code>v1.0.0</code> tag.</p>
+
+			
+		</main>
+		<footer>
+			<div class="wrapper">
+				<div>
+					&lsaquo; <a href="20.05-building-binaries.html">Previous</a>
+				</div>
+				<div>
+					<a href="00.01-contents.html">Contents</a>
+				</div>
+				<div>
+					<a href="21.00-deployment-and-hosting.html">Next</a> &rsaquo;
+				</div>
+			</div>
+		</footer>
+	</body>
+</html>
